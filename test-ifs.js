@@ -33,6 +33,14 @@ assert.strictEqual(r.length, 3);
 assert.strictEqual(r[1].depth, 1); assert.ok(r[1].requires[0].endsWith('為真'));
 assert.strictEqual(r[2].depth, 1); assert.ok(r[2].requires[0].endsWith('為假'));
 
+// 3b/4b. 結構資料:prevId、parent、parentBranch
+r = run('if (a == 1) { x(); } else if (a == 2) { y(); }');
+assert.strictEqual(r[0].prevId, -1); assert.strictEqual(r[1].prevId, r[0].id); assert.strictEqual(r[1].parent, -1);
+r = run('if (p) {\n  if (q) { a(); }\n} else {\n  if (s) { b(); }\n}');
+assert.strictEqual(r[0].parent, -1);
+assert.strictEqual(r[1].parent, r[0].id); assert.strictEqual(r[1].parentBranch, '真');
+assert.strictEqual(r[2].parent, r[0].id); assert.strictEqual(r[2].parentBranch, '假');
+
 // 5. 字串、註解、#if 內的 if 不算
 r = run('var s = "if (x) {}";\n// if (y) { }\n/* if (z) {} */\n#if DEBUG\nif (real) { go(); }');
 assert.strictEqual(r.length, 1); assert.strictEqual(r[0].cond, 'real');

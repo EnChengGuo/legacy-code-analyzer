@@ -287,6 +287,10 @@
 
     var groups = new Map();
     infos.forEach(function (i) {
+      var pr = parentOf(i);
+      i.parent = pr ? pr.info.id : -1;                       // 巢狀的外層 if(else if 取鏈頭的外層)
+      i.parentBranch = pr ? (pr.branch ? '真' : '假') : '';
+      i.prevId = prev[i.f.start] !== undefined ? byF.get(byStart[prev[i.f.start]]).id : -1;   // else if 鏈的前一個
       i.requires = reqs(i);
       i.depth = i.requires.length ? parentDepth(i) : 0;
       i.tests = buildTests(text.slice(i.f.open + 1, i.f.close < 0 ? text.length : i.f.close), m.slice(i.f.open + 1, i.f.close < 0 ? text.length : i.f.close));
