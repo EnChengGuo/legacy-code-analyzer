@@ -218,6 +218,7 @@
         }[op];
         return ['`' + lhs + '` 的邊界:' + pairs.map(function (p) { return '取 ' + p[0] + ' → ' + p[1]; }).join(';')];
       }
+      if (op === '==' || op === '!=') return ['`' + lhs + '` 與 `' + rhs + '`:各測「相等」與「不相等」'];
       return ['`' + lhs + '` 與 `' + rhs + '`:各測「相等、略大、略小」'];
     }
     return [];

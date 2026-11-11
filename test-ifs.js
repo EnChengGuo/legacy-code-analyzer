@@ -65,6 +65,10 @@ assert.strictEqual(r[0].tests.vectors.length, 3);
 r = run('if (a || !a) { }');
 assert.ok(r[0].tests.notes.length >= 1, '恆真條件應提示子條件無法獨立改變結果');
 
+// 10b. 非數字的 == 只提示相等/不相等;大小比較才提示略大略小
+assert.ok(run('if (s.Status == Status.Paid) { }')[0].tests.hints[0].includes('「相等」與「不相等」'));
+assert.ok(run('if (x > y) { }')[0].tests.hints[0].includes('略大'));
+
 // 11. 輸出文字可讀
 assert.ok(formatText(run('if (a && b) { }\n')[0]).includes('測試 1'));
 

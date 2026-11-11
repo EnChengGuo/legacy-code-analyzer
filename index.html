@@ -30,6 +30,11 @@ td{padding:0 6px;vertical-align:top;white-space:pre;border-top:1px solid transpa
 td.n{color:var(--mut);text-align:right;width:44px;user-select:none}
 td.c{width:calc(50% - 44px)}
 td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:var(--ren)}
+.iftbl td{white-space:normal;border-top:1px solid var(--bd);padding:4px 8px}
+.iftbl tr.r{cursor:pointer} .iftbl tr.r:hover{background:var(--card)}
+.iftbl td.cond{font-family:Consolas,monospace;word-break:break-all}
+.iftbl pre{margin:0;padding:8px;background:var(--card);border-radius:6px;white-space:pre-wrap;font:12.5px/1.5 Consolas,monospace}
+.tag{background:var(--ren);border-radius:4px;padding:0 6px;font-size:12px}
 .legend span{padding:1px 8px;border-radius:4px;margin-right:6px;font-size:12px}
 </style>
 </head>
@@ -54,14 +59,17 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
   <label>最低相似度 % <input type="number" id="sim" value="60" min="10" max="100"></label>
   <label><input type="checkbox" id="ign" checked> 忽略變數名與常數值</label>
   <button class="pri" id="go">找重複</button>
+  <button id="goif">列出 if 與測試項目</button>
   <span id="status"></span>
 </div>
 <p class="hint">行數只計實際程式行(不含空行、註解、單獨的大括號)。「容許差異行數」決定 else 多一兩行這類近似重複算不算同一組。</p>
 
 <div id="out"></div>
+<div id="ifout"></div>
 </main>
 
 <script src="core.js"></script>
+<script src="ifs.js"></script>
 <script src="sample.js"></script>
 <script>
 (function () {
@@ -146,6 +154,63 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
     return '<p class="legend hint"><span>完全相同 ' + c.eq + '</span><span style="background:var(--ren)">僅命名/常數不同 ' + c.ren +
       '</span><span style="background:var(--del)">只在基準有 ' + c.del + '</span><span style="background:var(--add)">只在此處有 ' + c.add + '</span></p>' +
       '<table>' + rows + '</table>';
+  }
+
+  /* ---------- if 清單與測試項目 ---------- */
+  var ifData = [];
+  $('goif').onclick = function () {
+    $('status').textContent = '分析 if 中…'; $('ifout').innerHTML = '';
+    setTimeout(runIfs, 20);
+  };
+
+  function runIfs() {
+    var t0 = performance.now();
+    ifData = IfCore.analyzeIfs($('src').value, { ignoreNames: $('ign').checked });
+    var rep = ifData.filter(function (i) { return i.groupSize > 1; }).length;
+    $('status').textContent = '完成:找到 ' + ifData.length + ' 個 if,其中 ' + rep + ' 個與其他處條件相同,耗時 ' +
+      ((performance.now() - t0) / 1000).toFixed(2) + ' 秒';
+    var box = $('ifout');
+    if (!ifData.length) { box.innerHTML = '<p>沒有找到 if。</p>'; return; }
+    box.innerHTML = '<h2 style="font-size:17px">if 清單</h2>' +
+      '<div class="row"><label>篩選條件文字 <input type="text" id="iff" style="padding:4px 6px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--fg)"></label>' +
+      '<label><input type="checkbox" id="ifrep"> 只看有相同條件的</label>' +
+      '<label><input type="checkbox" id="ifsort"> 相同條件排在一起</label>' +
+      '<button id="ifdl">下載全部測試項目 (.txt)</button></div>' +
+      '<div class="hint" id="ifnote"></div><div class="dv"><table class="iftbl"><thead><tr><td>行</td><td>條件</td><td>深度</td><td>分支</td><td>相同條件</td></tr></thead><tbody id="ifbody"></tbody></table></div>';
+    ['iff', 'ifrep', 'ifsort'].forEach(function (id) { $(id).addEventListener('input', renderIfRows); });
+    $('ifdl').onclick = downloadIfs;
+    renderIfRows();
+  }
+
+  function renderIfRows() {
+    var q = $('iff').value.trim().toLowerCase(), onlyRep = $('ifrep').checked, sort = $('ifsort').checked;
+    var rows = ifData.filter(function (i) {
+      return (!q || i.cond.toLowerCase().indexOf(q) >= 0) && (!onlyRep || i.groupSize > 1);
+    });
+    if (sort) rows = rows.slice().sort(function (a, b) { return b.groupSize - a.groupSize || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.line - b.line; });
+    var CAP = 300, shown = rows.slice(0, CAP);
+    $('ifnote').textContent = '符合 ' + rows.length + ' 個' + (rows.length > CAP ? ',只顯示前 ' + CAP + ' 個,請用篩選縮小範圍' : '') + '。點一列看測試項目。';
+    $('ifbody').innerHTML = shown.map(function (i, k) {
+      var br = (i.hasElse ? 'else' : '') + (i.hasElseIf ? 'else if' : '') + (i.isElseIf ? (i.hasElse || i.hasElseIf ? ' / ' : '') + '本身是 else if' : '');
+      return '<tr class="r" data-k="' + k + '"><td>' + i.line + '</td><td class="cond">' + esc(i.cond.length > 110 ? i.cond.slice(0, 110) + '…' : i.cond) +
+        '</td><td>' + i.depth + '</td><td>' + esc(br || '—') + '</td><td>' + (i.groupSize > 1 ? '<span class="tag">' + i.groupSize + ' 處</span>' : '—') + '</td></tr>';
+    }).join('');
+    Array.prototype.forEach.call($('ifbody').querySelectorAll('tr.r'), function (tr) {
+      tr.onclick = function () {
+        var nx = tr.nextSibling;
+        if (nx && nx.className === 'd') { nx.remove(); return; }
+        var d = document.createElement('tr'); d.className = 'd';
+        d.innerHTML = '<td colspan="5"><pre>' + esc(IfCore.formatText(shown[+tr.getAttribute('data-k')])) + '</pre></td>';
+        tr.parentNode.insertBefore(d, tr.nextSibling);
+      };
+    });
+  }
+
+  function downloadIfs() {
+    var text = ifData.map(IfCore.formatText).join('\n\n');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/plain;charset=utf-8' }));
+    a.download = 'if-test-items.txt'; document.body.appendChild(a); a.click(); a.remove();
   }
 
   updateCount();
