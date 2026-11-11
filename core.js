@@ -190,7 +190,7 @@
     return { lines: parsed.lines, keptCount: parsed.kept.length, groups: groups, truncated: res.truncated };
   }
 
-  var api = { parse: parse, findPairs: findPairs, cluster: cluster, diffLines: diffLines, analyze: analyze };
+  var api = { normLine: normLine, parse: parse, findPairs: findPairs, cluster: cluster, diffLines: diffLines, analyze: analyze };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.DupCore = api;
 })(typeof window !== 'undefined' ? window : this);
