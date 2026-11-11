@@ -9,7 +9,13 @@
 @media(prefers-color-scheme:dark){:root{--bg:#16181d;--fg:#e8e9ec;--mut:#9aa0aa;--bd:#2c3038;--card:#1f2229;--add:#1f3d27;--del:#472428;--ren:#4a421c;--acc:#6ea0ff;--accfg:#10141c}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Microsoft JhengHei",sans-serif}
-main{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+main{max-width:1700px;margin:0 auto;padding:20px 16px 60px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+#right{position:sticky;top:12px;height:calc(100vh - 24px);display:flex;flex-direction:column;border:1px solid var(--bd);border-radius:8px;padding:12px;background:var(--card)}
+#right h2{font-size:17px;margin:0 0 4px}
+#right .row{margin:8px 0}
+#work{flex:1;height:auto;min-height:260px;background:var(--bg);resize:none}
+@media(max-width:980px){main{grid-template-columns:minmax(0,1fr)}#right{position:static;height:auto}#work{height:360px;flex:none}}
+.sw{padding:2px 10px;font-size:13px}
 h1{font-size:20px;margin:0 0 4px}
 .sub{color:var(--mut);margin:0 0 16px}
 textarea{width:100%;height:240px;font:13px/1.45 Consolas,monospace;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:10px;resize:vertical;white-space:pre;overflow:auto}
@@ -40,6 +46,7 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
 </head>
 <body>
 <main>
+<section id="left">
 <h1>重複程式碼偵測</h1>
 <p class="sub">貼上 C# 程式碼(可分段貼),找出出現多次的區塊,並排顯示差異。全部在瀏覽器內執行,不上傳、不需安裝。</p>
 
@@ -66,6 +73,19 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
 
 <div id="out"></div>
 <div id="ifout"></div>
+</section>
+
+<aside id="right">
+  <h2>作業區</h2>
+  <div class="hint">把左邊找到的區塊送過來,在這裡貼上、改寫、整理成函式。內容會暫存在這個瀏覽器裡。</div>
+  <div class="row">
+    <button id="wcopy">複製全部</button>
+    <button id="wdl">下載 .cs</button>
+    <button id="wclear">清空</button>
+    <span id="wcount" class="hint"></span>
+  </div>
+  <textarea id="work" spellcheck="false" placeholder="作業區:可直接貼上、修改程式碼"></textarea>
+</aside>
 </main>
 
 <script src="core.js"></script>
@@ -125,11 +145,15 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
       '<div class="locs"></div><div class="hint">以第一處為基準,點其他處查看差異。</div><div class="dv"></div>';
     var locs = d.querySelector('.locs'), dv = d.querySelector('.dv'), btns = [];
     g.members.forEach(function (m, i) {
+      var wrap = document.createElement('span');
       var b = document.createElement('button');
       b.textContent = (i === 0 ? '基準 ' : '') + loc(m);
       if (i > 0) b.onclick = function () { show(i); };
       else b.disabled = true;
-      locs.appendChild(b); btns.push(b);
+      var sb = document.createElement('button'); sb.className = 'sw'; sb.textContent = '→ 作業區';
+      sb.title = '把這一處複製到右側作業區';
+      sb.onclick = function () { sendToWork('重複區塊 ' + loc(m), lastLines.slice(m.from, m.to + 1).map(function (l) { return l.raw; }).join('\n')); };
+      wrap.appendChild(b); wrap.appendChild(sb); locs.appendChild(wrap); btns.push(b);
     });
     function show(i) {
       btns.forEach(function (b, k) { b.classList.toggle('on', k === i); });
@@ -157,7 +181,7 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
   }
 
   /* ---------- if 清單與測試項目 ---------- */
-  var ifData = [];
+  var ifData = [], ifLines = [];
   $('goif').onclick = function () {
     $('status').textContent = '分析 if 中…'; $('ifout').innerHTML = '';
     setTimeout(runIfs, 20);
@@ -165,6 +189,7 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
 
   function runIfs() {
     var t0 = performance.now();
+    ifLines = $('src').value.split(/\r?\n/);
     ifData = IfCore.analyzeIfs($('src').value, { ignoreNames: $('ign').checked });
     var rep = ifData.filter(function (i) { return i.groupSize > 1; }).length;
     $('status').textContent = '完成:找到 ' + ifData.length + ' 個 if,其中 ' + rep + ' 個與其他處條件相同,耗時 ' +
@@ -200,7 +225,15 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
         var nx = tr.nextSibling;
         if (nx && nx.className === 'd') { nx.remove(); return; }
         var d = document.createElement('tr'); d.className = 'd';
-        d.innerHTML = '<td colspan="5"><pre>' + esc(IfCore.formatText(shown[+tr.getAttribute('data-k')])) + '</pre></td>';
+        var info = shown[+tr.getAttribute('data-k')];
+        d.innerHTML = '<td colspan="5"><pre>' + esc(IfCore.formatText(info)) + '</pre>' +
+          '<p><button class="sw" data-w="code">→ 作業區:這段程式碼</button> <button class="sw" data-w="test">→ 作業區:測試項目</button></p></td>';
+        d.querySelector('[data-w=code]').onclick = function () {
+          sendToWork('if 第 ' + info.line + '–' + info.endLine + ' 行', ifLines.slice(info.line - 1, info.endLine).join('\n'));
+        };
+        d.querySelector('[data-w=test]').onclick = function () {
+          sendToWork('測試項目 if 第 ' + info.line + ' 行', IfCore.formatText(info).split('\n').map(function (s) { return '// ' + s; }).join('\n'));
+        };
         tr.parentNode.insertBefore(d, tr.nextSibling);
       };
     });
@@ -212,6 +245,38 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
     a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/plain;charset=utf-8' }));
     a.download = 'if-test-items.txt'; document.body.appendChild(a); a.click(); a.remove();
   }
+
+  /* ---------- 作業區 ---------- */
+  var KEY = 'dupfinder.work', saveTimer = null;
+  function wcount() { var v = $('work').value; $('wcount').textContent = v ? v.split('\n').length + ' 行' : ''; }
+  function saveWork() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () { try { localStorage.setItem(KEY, $('work').value); } catch (e) { /* 無法暫存就算了 */ } }, 400);
+  }
+  function sendToWork(label, body) {
+    var w = $('work'), cur = w.value;
+    w.value = (cur ? cur.replace(/\s+$/, '') + '\n\n' : '') + '// === ' + label + '\n' + body + '\n';
+    w.scrollTop = w.scrollHeight; wcount(); saveWork();
+    $('status').textContent = '已送到作業區:' + label;
+  }
+  try { $('work').value = localStorage.getItem(KEY) || ''; } catch (e) { /* 讀不到就從空白開始 */ }
+  $('work').addEventListener('input', function () { wcount(); saveWork(); });
+  $('wclear').onclick = function () {
+    if ($('work').value && !confirm('清空作業區?這會刪除目前的內容。')) return;
+    $('work').value = ''; wcount(); saveWork();
+  };
+  $('wcopy').onclick = function () {
+    var w = $('work'), done = function () { $('status').textContent = '已複製作業區內容'; };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(w.value).then(done, fallback);
+    else fallback();
+    function fallback() { w.select(); try { if (document.execCommand('copy')) done(); } catch (e) { /* 請手動複製 */ } }
+  };
+  $('wdl').onclick = function () {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + $('work').value], { type: 'text/plain;charset=utf-8' }));
+    a.download = 'work.cs'; document.body.appendChild(a); a.click(); a.remove();
+  };
+  wcount();
 
   updateCount();
 })();
