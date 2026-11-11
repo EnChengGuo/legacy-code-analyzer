@@ -16,6 +16,14 @@ main{max-width:1700px;margin:0 auto;padding:20px 16px 60px;display:grid;grid-tem
 #work{flex:1;height:auto;min-height:260px;background:var(--bg);resize:none}
 @media(max-width:980px){main{grid-template-columns:minmax(0,1fr)}#right{position:static;height:auto}#work{height:360px;flex:none}}
 .sw{padding:2px 10px;font-size:13px}
+.gbox{overflow:auto;border:1px solid var(--bd);border-radius:8px;background:var(--bg);max-height:520px}
+.gsvg text{font:12px Consolas,monospace;fill:var(--fg);pointer-events:none}
+.gsvg .glab{font:11px system-ui,sans-serif;fill:var(--mut)}
+.gsvg .gcnt{font:11px system-ui,sans-serif;fill:var(--mut)}
+.gsvg .gn{cursor:pointer}
+.gsvg .gn rect.b{fill:var(--bg);stroke:var(--bd);stroke-width:1.5}
+.gsvg .gedge{fill:none;stroke:var(--mut);stroke-width:1.2}
+.chip{display:inline-block;margin:0 6px 6px 0}
 h1{font-size:20px;margin:0 0 4px}
 .sub{color:var(--mut);margin:0 0 16px}
 textarea{width:100%;height:240px;font:13px/1.45 Consolas,monospace;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:10px;resize:vertical;white-space:pre;overflow:auto}
@@ -67,12 +75,14 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
   <label><input type="checkbox" id="ign" checked> 忽略變數名與常數值</label>
   <button class="pri" id="go">找重複</button>
   <button id="goif">列出 if 與測試項目</button>
+  <button id="gograph">畫 if 節點圖</button>
   <span id="status"></span>
 </div>
 <p class="hint">行數只計實際程式行(不含空行、註解、單獨的大括號)。「容許差異行數」決定 else 多一兩行這類近似重複算不算同一組。</p>
 
 <div id="out"></div>
 <div id="ifout"></div>
+<div id="graphout"></div>
 </section>
 
 <aside id="right">
@@ -90,6 +100,7 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
 
 <script src="core.js"></script>
 <script src="ifs.js"></script>
+<script src="graph.js"></script>
 <script src="sample.js"></script>
 <script>
 (function () {
@@ -163,8 +174,9 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
     return d;
   }
 
-  function renderDiff(m1, m2) {
-    var A = lastLines.slice(m1.from, m1.to + 1), B = lastLines.slice(m2.from, m2.to + 1);
+  function renderDiff(m1, m2, lines) {
+    lines = lines || lastLines;
+    var A = lines.slice(m1.from, m1.to + 1), B = lines.slice(m2.from, m2.to + 1);
     var ops = DupCore.diffLines(A, B);
     if (!ops) return '<p class="hint">區塊太大,無法並排顯示。請縮小範圍後再試。</p>';
     var c = { eq: 0, ren: 0, del: 0, add: 0 };
@@ -187,10 +199,19 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
     setTimeout(runIfs, 20);
   };
 
+  var ifText = null, ifIgn = null, gLines = [];
+  function computeIfs() {                      // 文字與選項沒變就沿用上次結果
+    var text = $('src').value, ign = $('ign').checked;
+    if (ifText === text && ifIgn === ign) return;
+    ifLines = text.split(/\r?\n/);
+    ifData = IfCore.analyzeIfs(text, { ignoreNames: ign });
+    gLines = DupCore.parse(text, ign).lines;
+    ifText = text; ifIgn = ign;
+  }
+
   function runIfs() {
     var t0 = performance.now();
-    ifLines = $('src').value.split(/\r?\n/);
-    ifData = IfCore.analyzeIfs($('src').value, { ignoreNames: $('ign').checked });
+    computeIfs();
     var rep = ifData.filter(function (i) { return i.groupSize > 1; }).length;
     $('status').textContent = '完成:找到 ' + ifData.length + ' 個 if,其中 ' + rep + ' 個與其他處條件相同,耗時 ' +
       ((performance.now() - t0) / 1000).toFixed(2) + ' 秒';
@@ -244,6 +265,122 @@ td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:va
     var a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/plain;charset=utf-8' }));
     a.download = 'if-test-items.txt'; document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  /* ---------- if 節點圖 ---------- */
+  var gSel = -1, gRoot = -1, gFrom = 1, gTo = 1e9, gDiffId = -1;
+  var NODE_W = 220, NODE_H = 28, COL_W = 270, ROW_H = 40, MAX_NODES = 200;
+
+  $('gograph').onclick = function () {
+    $('status').textContent = '畫圖中…';
+    setTimeout(function () { gRoot = -1; gSel = -1; gDiffId = -1; computeIfs(); drawGraph(); }, 20);
+  };
+
+  function groupColors(nodes) {
+    var count = new Map();
+    nodes.forEach(function (n) { if (n.groupSize > 1) count.set(n.key, n.groupSize); });
+    var keys = Array.from(count.keys()).sort(function (a, b) { return count.get(b) - count.get(a); }), map = new Map();
+    keys.forEach(function (k, i) { map.set(k, 'hsl(' + Math.round((i * 137.5) % 360) + ' 70% 48%)'); });
+    return map;
+  }
+
+  function scopeNodes() {
+    if (gRoot >= 0) {
+      var r = ifData[gRoot];
+      return ifData.filter(function (i) { return i.line >= r.line && i.line <= r.endLine; });
+    }
+    return ifData.filter(function (i) { return i.line >= gFrom && i.line <= gTo; });
+  }
+
+  function drawGraph() {
+    var box = $('graphout');
+    if (!ifData.length) { box.innerHTML = '<p>沒有找到 if。</p>'; $('status').textContent = ''; return; }
+    var nodes = scopeNodes();
+    var head = '<h2 style="font-size:17px">if 節點圖</h2>' +
+      '<div class="row"><label>行範圍 <input type="number" id="gfrom" value="' + (gFrom > 1 ? gFrom : '') + '" placeholder="起" min="1"> – ' +
+      '<input type="number" id="gto" value="' + (gTo < 1e9 ? gTo : '') + '" placeholder="迄" min="1"></label>' +
+      '<button id="gredraw">重畫</button>' + (gRoot >= 0 ? '<button id="gall">回到全部</button>' : '') + '</div>';
+    box.innerHTML = head + '<div id="gbody"></div>';
+    $('gredraw').onclick = function () {
+      gFrom = +$('gfrom').value || 1; gTo = +$('gto').value || 1e9; gRoot = -1; gSel = -1; gDiffId = -1; drawGraph();
+    };
+    if ($('gall')) $('gall').onclick = function () { gRoot = -1; gSel = -1; gDiffId = -1; drawGraph(); };
+
+    if (nodes.length > MAX_NODES) {
+      $('gbody').innerHTML = '<p>這個範圍有 ' + nodes.length + ' 個 if,超過 ' + MAX_NODES + ' 個圖會看不清楚。請用上面的行範圍縮小,例如一個方法的起訖行。</p>';
+      $('status').textContent = '範圍太大(' + nodes.length + ' 個 if)'; return;
+    }
+    if (!nodes.length) { $('gbody').innerHTML = '<p>這個範圍沒有 if。</p>'; return; }
+
+    var L = GraphCore.layout(nodes), colors = groupColors(nodes), byId = new Map();
+    nodes.forEach(function (n) { byId.set(n.id, n); });
+    var sel = byId.get(gSel), selKey = sel && sel.groupSize > 1 ? sel.key : null;
+    var W = L.cols * COL_W + 20, H = Math.ceil((L.rows - 1) * ROW_H + NODE_H + 24);
+    function nx(id) { return 10 + L.pos.get(id).x * COL_W; }
+    function ny(id) { return 10 + L.pos.get(id).y * ROW_H; }
+
+    var s = '<svg class="gsvg" width="' + W + '" height="' + H + '" xmlns="http://www.w3.org/2000/svg">';
+    L.edges.forEach(function (e) {
+      if (e.kind === 'nest') {
+        var x1 = nx(e.from) + NODE_W, y1 = ny(e.from) + NODE_H / 2, x2 = nx(e.to), y2 = ny(e.to) + NODE_H / 2, mx = (x1 + x2) / 2;
+        s += '<path class="gedge" d="M' + x1 + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + x2 + ' ' + y2 + '"/>' +
+             '<text class="glab" x="' + (x2 - 22) + '" y="' + (y2 - 4) + '">' + e.label + '</text>';
+      } else {
+        var x = nx(e.from) + NODE_W / 2, ya = ny(e.from) + NODE_H, yb = ny(e.to);
+        s += '<path class="gedge" d="M' + x + ' ' + ya + ' L' + x + ' ' + yb + '"/><text class="glab" x="' + (x + 5) + '" y="' + ((ya + yb) / 2 + 4) + '">假</text>';
+      }
+    });
+    nodes.forEach(function (n) {
+      var c = colors.get(n.key), same = selKey && n.key === selKey, isSel = n.id === gSel;
+      var stroke = isSel ? 'var(--acc)' : (same ? c : ''), sw = isSel ? 3 : (same ? 3 : 1.5);
+      var label = 'L' + n.line + ' ' + n.cond; if (label.length > 27) label = label.slice(0, 26) + '…';
+      s += '<g class="gn" data-id="' + n.id + '"><title>第 ' + n.line + '–' + n.endLine + ' 行 if (' + esc(n.cond) + ')</title>' +
+        '<rect class="b" x="' + nx(n.id) + '" y="' + ny(n.id) + '" width="' + NODE_W + '" height="' + NODE_H + '" rx="6"' +
+        (stroke ? ' style="stroke:' + stroke + ';stroke-width:' + sw + '"' : '') + '/>' +
+        (c ? '<rect x="' + nx(n.id) + '" y="' + ny(n.id) + '" width="6" height="' + NODE_H + '" rx="3" fill="' + c + '"/>' : '') +
+        '<text x="' + (nx(n.id) + 12) + '" y="' + (ny(n.id) + 18) + '">' + esc(label) + '</text>' +
+        (n.groupSize > 1 ? '<text class="gcnt" x="' + (nx(n.id) + NODE_W - 4) + '" y="' + (ny(n.id) + 18) + '" text-anchor="end">×' + n.groupSize + '</text>' : '') +
+        '</g>';
+    });
+    s += '</svg>';
+
+    $('gbody').innerHTML = '<p class="hint">共 ' + nodes.length + ' 個 if。同色的節點是相同條件,數字是出現次數。點節點查看並比對。</p>' +
+      '<div class="gbox">' + s + '</div><div id="gdetail"></div>';
+    $('status').textContent = '節點圖:' + nodes.length + ' 個 if';
+    $('gbody').querySelector('svg').addEventListener('click', function (ev) {
+      var g = ev.target.closest ? ev.target.closest('g.gn') : null;
+      if (!g) return;
+      var old = $('gbody').querySelector('.gbox'), sl = old.scrollLeft, st = old.scrollTop;
+      gSel = +g.getAttribute('data-id'); gDiffId = -1; drawGraph();
+      var nb = $('gbody').querySelector('.gbox'); if (nb) { nb.scrollLeft = sl; nb.scrollTop = st; }   // 保持捲動位置
+    });
+    if (sel) renderDetail(sel);
+  }
+
+  function renderDetail(n) {
+    var d = $('gdetail');
+    var same = ifData.filter(function (x) { return x.key === n.key && x.id !== n.id; });
+    var h = '<div class="card"><div class="ch">第 ' + n.line + '–' + n.endLine + ' 行 · if (' + esc(n.cond) + ')</div>';
+    if (n.requires.length) h += '<div class="hint">要走到這裡:' + esc(n.requires.join(';')) + '</div>';
+    h += '<p><button class="sw" id="gwork">→ 作業區:這段程式碼</button> ' +
+      (gRoot !== n.id ? '<button class="sw" id="groot">只看這個 if 及其內部</button>' : '') + '</p>';
+    if (same.length) {
+      h += '<div>相同條件的其他處(點擊比對 if 底下的程式碼):</div><div>' +
+        same.map(function (x) { return '<button class="chip' + (x.id === gDiffId ? ' on' : '') + '" data-c="' + x.id + '">第 ' + x.line + '–' + x.endLine + ' 行</button>'; }).join('') + '</div>';
+    } else h += '<div class="hint">這個條件沒有出現在其他地方。</div>';
+    h += '<div class="dv" id="gdiff"></div></div>';
+    d.innerHTML = h;
+    $('gwork').onclick = function () { sendToWork('if 第 ' + n.line + '–' + n.endLine + ' 行', ifLines.slice(n.line - 1, n.endLine).join('\n')); };
+    if ($('groot')) $('groot').onclick = function () { gRoot = n.id; gDiffId = -1; drawGraph(); };
+    Array.prototype.forEach.call(d.querySelectorAll('[data-c]'), function (b) {
+      b.onclick = function () {
+        gDiffId = +b.getAttribute('data-c');
+        var o = ifData[gDiffId];
+        Array.prototype.forEach.call(d.querySelectorAll('[data-c]'), function (x) { x.classList.toggle('on', x === b); });
+        $('gdiff').innerHTML = '<p class="hint">左:第 ' + n.line + ' 行這個 if;右:第 ' + o.line + ' 行這個 if。</p>' +
+          renderDiff({ from: n.line - 1, to: n.endLine - 1 }, { from: o.line - 1, to: o.endLine - 1 }, gLines);
+      };
+    });
   }
 
   /* ---------- 作業區 ---------- */
