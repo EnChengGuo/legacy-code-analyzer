@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>重複程式碼偵測</title>
+<style>
+:root{--bg:#fff;--fg:#1c1c1e;--mut:#6b7280;--bd:#d9dce1;--card:#f6f7f9;--add:#d3f0d8;--del:#fadada;--ren:#fff0b8;--acc:#2563eb;--accfg:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#16181d;--fg:#e8e9ec;--mut:#9aa0aa;--bd:#2c3038;--card:#1f2229;--add:#1f3d27;--del:#472428;--ren:#4a421c;--acc:#6ea0ff;--accfg:#10141c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Microsoft JhengHei",sans-serif}
+main{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 16px}
+textarea{width:100%;height:240px;font:13px/1.45 Consolas,monospace;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:10px;resize:vertical;white-space:pre;overflow:auto}
+.row{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin:12px 0}
+label{display:flex;gap:6px;align-items:center}
+input[type=number]{width:64px;padding:4px 6px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--fg)}
+button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
+button.pri{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
+button.on{outline:2px solid var(--acc)}
+#status{color:var(--mut)}
+.card{border:1px solid var(--bd);border-radius:8px;margin:14px 0;background:var(--card);padding:12px 14px}
+.ch{font-weight:600;margin-bottom:8px}
+.locs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.hint{color:var(--mut);font-size:13px}
+.dv{overflow-x:auto;margin-top:8px}
+table{border-collapse:collapse;width:100%;font:12.5px/1.4 Consolas,monospace}
+td{padding:0 6px;vertical-align:top;white-space:pre;border-top:1px solid transparent}
+td.n{color:var(--mut);text-align:right;width:44px;user-select:none}
+td.c{width:calc(50% - 44px)}
+td.add{background:var(--add)} td.del{background:var(--del)} td.ren{background:var(--ren)}
+.legend span{padding:1px 8px;border-radius:4px;margin-right:6px;font-size:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>重複程式碼偵測</h1>
+<p class="sub">貼上 C# 程式碼(可分段貼),找出出現多次的區塊,並排顯示差異。全部在瀏覽器內執行,不上傳、不需安裝。</p>
+
+<textarea id="src" spellcheck="false" placeholder="在這裡貼上程式碼,或載入 .txt / .cs 檔案"></textarea>
+
+<div class="row">
+  <button id="load">載入檔案…</button>
+  <input type="file" id="file" accept=".txt,.cs" multiple hidden>
+  <button id="sample">載入範例</button>
+  <button id="clear">清空</button>
+  <span id="count" class="hint"></span>
+</div>
+
+<div class="row">
+  <label>最少重複行數 <input type="number" id="minl" value="30" min="3"></label>
+  <label>容許差異行數 <input type="number" id="gap" value="3" min="0" max="20"></label>
+  <label>最低相似度 % <input type="number" id="sim" value="60" min="10" max="100"></label>
+  <label><input type="checkbox" id="ign" checked> 忽略變數名與常數值</label>
+  <button class="pri" id="go">找重複</button>
+  <span id="status"></span>
+</div>
+<p class="hint">行數只計實際程式行(不含空行、註解、單獨的大括號)。「容許差異行數」決定 else 多一兩行這類近似重複算不算同一組。</p>
+
+<div id="out"></div>
+</main>
+
+<script src="core.js"></script>
+<script src="sample.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var lastLines = [];
+
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function updateCount() { var n = $('src').value ? $('src').value.split('\n').length : 0; $('count').textContent = n ? n + ' 行' : ''; }
+
+  $('src').addEventListener('input', updateCount);
+  $('load').onclick = function () { $('file').click(); };
+  $('file').onchange = function () {
+    var files = Array.prototype.slice.call(this.files), self = this;
+    Promise.all(files.map(function (f) {
+      return f.text().then(function (t) { return '//=== ' + f.name + '\n' + t; });
+    })).then(function (parts) {
+      var cur = $('src').value;
+      $('src').value = (cur ? cur + '\n' : '') + parts.join('\n');
+      self.value = ''; updateCount();
+    });
+  };
+  $('sample').onclick = function () { $('src').value = window.SAMPLE; $('minl').value = 10; updateCount(); };
+  $('clear').onclick = function () { $('src').value = ''; $('out').innerHTML = ''; $('status').textContent = ''; updateCount(); };
+
+  $('go').onclick = function () {
+    $('status').textContent = '分析中…'; $('out').innerHTML = '';
+    setTimeout(run, 20);
+  };
+
+  function run() {
+    var t0 = performance.now();
+    var opt = { minLines: +$('minl').value, gap: +$('gap').value, minSim: +$('sim').value / 100, ignoreNames: $('ign').checked };
+    var r = DupCore.analyze($('src').value, opt);
+    lastLines = r.lines;
+    var sec = ((performance.now() - t0) / 1000).toFixed(2);
+    $('status').textContent = '完成:有效程式 ' + r.keptCount + ' 行,找到 ' + r.groups.length + ' 組,耗時 ' + sec + ' 秒';
+    var out = $('out');
+    if (r.truncated) {
+      out.insertAdjacentHTML('beforeend', '<p class="hint">提醒:有些極常出現的片段(超過 200 處)被略過,這通常是樣板程式碼。</p>');
+    }
+    if (!r.groups.length) {
+      out.insertAdjacentHTML('beforeend', '<p>沒有找到符合條件的重複。可以調低「最少重複行數」或「最低相似度」,或勾選「忽略變數名與常數值」。</p>');
+      return;
+    }
+    r.groups.forEach(function (g, gi) { out.appendChild(card(g, gi)); });
+  }
+
+  function loc(m) { return '第 ' + (m.from + 1) + '–' + (m.to + 1) + ' 行'; }
+
+  function card(g, gi) {
+    var d = document.createElement('div'); d.className = 'card';
+    d.innerHTML = '<div class="ch">第 ' + (gi + 1) + ' 組:' + g.members.length + ' 處 · 約 ' + g.lines + ' 行 · 相似度 ' + Math.round(g.sim * 100) + '%</div>' +
+      '<div class="locs"></div><div class="hint">以第一處為基準,點其他處查看差異。</div><div class="dv"></div>';
+    var locs = d.querySelector('.locs'), dv = d.querySelector('.dv'), btns = [];
+    g.members.forEach(function (m, i) {
+      var b = document.createElement('button');
+      b.textContent = (i === 0 ? '基準 ' : '') + loc(m);
+      if (i > 0) b.onclick = function () { show(i); };
+      else b.disabled = true;
+      locs.appendChild(b); btns.push(b);
+    });
+    function show(i) {
+      btns.forEach(function (b, k) { b.classList.toggle('on', k === i); });
+      dv.innerHTML = renderDiff(g.members[0], g.members[i]);
+    }
+    if (g.members.length > 1) show(1);
+    return d;
+  }
+
+  function renderDiff(m1, m2) {
+    var A = lastLines.slice(m1.from, m1.to + 1), B = lastLines.slice(m2.from, m2.to + 1);
+    var ops = DupCore.diffLines(A, B);
+    if (!ops) return '<p class="hint">區塊太大,無法並排顯示。請縮小範圍後再試。</p>';
+    var c = { eq: 0, ren: 0, del: 0, add: 0 };
+    var rows = ops.map(function (o) {
+      c[o.t]++;
+      var a = o.a, b = o.b, ca = '', cb = '';
+      if (o.t === 'del') ca = 'del'; else if (o.t === 'add') cb = 'add'; else if (o.t === 'ren') ca = cb = 'ren';
+      return '<tr><td class="n">' + (a ? a.no : '') + '</td><td class="c ' + ca + '">' + esc(a ? a.raw : '') +
+        '</td><td class="n">' + (b ? b.no : '') + '</td><td class="c ' + cb + '">' + esc(b ? b.raw : '') + '</td></tr>';
+    }).join('');
+    return '<p class="legend hint"><span>完全相同 ' + c.eq + '</span><span style="background:var(--ren)">僅命名/常數不同 ' + c.ren +
+      '</span><span style="background:var(--del)">只在基準有 ' + c.del + '</span><span style="background:var(--add)">只在此處有 ' + c.add + '</span></p>' +
+      '<table>' + rows + '</table>';
+  }
+
+  updateCount();
+})();
+</script>
+</body>
+</html>
